@@ -13,16 +13,15 @@ It handles authentication, users, product listings, search, authorization, and c
 * Search and filter functionality
 * Listing ownership and authorization
 * Product image upload integration
-* MongoDB database integration
+* PostgreSQL database integration
 * REST API
 
 ## Tech Stack
 
 * **Runtime:** Node.js
-* **Framework:** Express.js
-* **Database:** MongoDB
-* **Authentication:** JWT
-* **Image Storage:** External/Cloud Storage
+* **Framework:** Express.js & TypeScript
+* **Database:** PostgreSQL
+* **Authentication:** JWT (HTTP-only cookies) & Google OAuth 2.0
 * **API:** REST API
 
 ## Project Structure
@@ -64,14 +63,28 @@ Create a `.env` file:
 
 ```env id="h4y8kp"
 PORT=5000
-MONGODB_URI=<mongodb-connection-string>
+DATABASE_URL=postgresql://postgres:your_password@localhost:5432/campus_marketplace
 JWT_SECRET=<jwt-secret>
-IMAGE_STORAGE_URL=<image-storage-url>
+CLIENT_URL=http://localhost:5173
 ```
 
 Do not commit `.env` files or sensitive credentials.
 
-### 4. Run the Server
+### 4. Initialize Database Schema & Seed Data
+
+Run the migration script to apply the PostgreSQL schema (no `psql` CLI required):
+
+```bash
+npm run db:init
+```
+
+Optionally seed test accounts across all 4 roles (`STUDENT`, `SELLER`, `ADMIN`, `SUPER_ADMIN`):
+
+```bash
+npm run seed
+```
+
+### 5. Run the Server
 
 Development:
 
