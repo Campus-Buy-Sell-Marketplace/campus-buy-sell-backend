@@ -45,3 +45,29 @@ CREATE TRIGGER set_updated_at
   BEFORE UPDATE ON users
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================
+-- Seller Applications Table
+-- ============================================================
+CREATE TABLE IF NOT EXISTS seller_applications (
+  id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  business_name   VARCHAR(255) NOT NULL,
+  description     TEXT         NOT NULL,
+  contact_number  VARCHAR(50)  NOT NULL,
+  status          VARCHAR(20)  NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
+  admin_notes     TEXT,
+  created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  CONSTRAINT unique_user_seller_application UNIQUE (user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_seller_apps_user_id ON seller_applications (user_id);
+CREATE INDEX IF NOT EXISTS idx_seller_apps_status  ON seller_applications (status);
+
+DROP TRIGGER IF EXISTS set_seller_apps_updated_at ON seller_applications;
+CREATE TRIGGER set_seller_apps_updated_at
+  BEFORE UPDATE ON seller_applications
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at();
+
