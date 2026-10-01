@@ -46,6 +46,52 @@ function toPublicUser(user: User): PublicUser {
 // ─── Controllers ─────────────────────────────────────────────────────────────
 
 /**
+ * POST /api/auth/register
+ *
+ * Flow:
+ * 1. Validate request body (name, email, password)
+ * 2. Check that email is not already registered
+ * 3. Hash the password with bcrypt
+ * 4. Create the user in PostgreSQL
+ * 5. Issue a JWT and return token + user info
+ */
+export async function registerWithEmail(req: Request, res: Response): Promise<void> {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    res.status(400).json({ message: errors.array()[0].msg });
+    return;
+  }
+
+  const { name, email, password } = req.body as { name: string; email: string; password: string };
+
+  try {
+    // Check for duplicate email
+    const existing = await findByEmail(email);
+    if (existing) {
+      res.status(409).json({ message: 'An account with this email already exists.' });
+      return;
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    // Create user
+    const user = await createUser({ name, email, password: hashedPassword });
+
+    const token = signToken(user);
+    setAuthCookie(res, token);
+
+    res.status(201).json({
+      token,
+      user: toPublicUser(user),
+    });
+  } catch (err) {
+    console.error('[registerWithEmail] error:', err);
+    res.status(500).json({ message: 'Server error. Please try again later.' });
+  }
+}
+
+/**
  * POST /api/auth/login
  *
  * Flow:

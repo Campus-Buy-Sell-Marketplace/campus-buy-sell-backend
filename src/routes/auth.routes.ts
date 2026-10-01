@@ -7,12 +7,24 @@ import {
   getMe,
   logout,
   googleAuthCallback,
+  registerWithEmail,
 } from '../controllers/auth.controller';
 import { authenticate } from '../middleware/auth.middleware';
 
 const router = Router();
 
 // ─── Email + Password ─────────────────────────────────────────────────────────
+
+// POST /api/auth/register
+router.post(
+  '/register',
+  [
+    body('name').trim().notEmpty().withMessage('Name is required.'),
+    body('email').trim().isEmail().withMessage('Please enter a valid email address.'),
+    body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters.'),
+  ],
+  registerWithEmail
+);
 
 // POST /api/auth/login
 // Validates email + password, then calls the controller

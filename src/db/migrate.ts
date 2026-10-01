@@ -3,36 +3,53 @@ import path from 'path';
 import pool from '../config/db';
 
 async function migrate(): Promise<void> {
-  const schemaPath = path.join(__dirname, 'schema.sql');
-
   if (!process.env.DATABASE_URL) {
-    console.error('❌ Error: DATABASE_URL is not set in campus-buy-sell-backend/.env');
-    console.error('👉 Please copy .env.example to .env and configure your PostgreSQL connection string.');
+    console.error('\u274c Error: DATABASE_URL is not set in campus-buy-sell-backend/.env');
+    console.error('\ud83d\udc49 Please copy .env.example to .env and configure your PostgreSQL connection string.');
     process.exit(1);
   }
 
-  console.log('🔄 Connecting to PostgreSQL and applying schema...');
-  console.log(`📄 Reading: ${schemaPath}\n`);
+  // Apply V1 schema (users, seller_applications)
+  const schemaPath = path.join(__dirname, 'schema.sql');
+  console.log('\ud83d\udd04 Connecting to PostgreSQL and applying schema...');
+  console.log(`\ud83d\udcc4 Reading: ${schemaPath}\n`);
 
   try {
     const sql = fs.readFileSync(schemaPath, 'utf8');
     await pool.query(sql);
-
-    console.log('✅ PostgreSQL schema created successfully!');
+    console.log('\u2705 PostgreSQL schema V1 created successfully!');
     console.log('   - Enum user_role created');
     console.log('   - Table users created');
+    console.log('   - Table seller_applications created');
     console.log('   - Indexes and trigger created\n');
   } catch (err: any) {
-    console.error('❌ Failed to apply database schema:');
+    console.error('\u274c Failed to apply database schema V1:');
     console.error(err.message || err);
     console.error('\nTroubleshooting tips:');
     console.error('1. Make sure your PostgreSQL server/service or Docker container is running.');
     console.error('2. Verify the credentials, port (5432), and database name in your .env DATABASE_URL.');
     console.error('3. Make sure the database exists (e.g. CREATE DATABASE campus_marketplace).');
-    process.exit(1);
-  } finally {
     await pool.end();
+    process.exit(1);
   }
+
+  // Apply V2 schema (products & cart)
+  const schema2Path = path.join(__dirname, 'schema_v2.sql');
+  console.log('\ud83d\udd04 Applying schema V2 (products & cart)...');
+  try {
+    const sql2 = fs.readFileSync(schema2Path, 'utf8');
+    await pool.query(sql2);
+    console.log('\u2705 Schema V2 applied successfully!');
+    console.log('   - Table products created');
+    console.log('   - Table cart_items created\n');
+  } catch (err: any) {
+    console.error('\u274c Failed to apply schema V2:');
+    console.error(err.message || err);
+    await pool.end();
+    process.exit(1);
+  }
+
+  await pool.end();
 }
 
 migrate();

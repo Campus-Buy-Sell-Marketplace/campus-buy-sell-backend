@@ -9,6 +9,8 @@ import './config/passport';
 import authRoutes from './routes/auth.routes';
 import sellerRoutes from './routes/seller.routes';
 import adminRoutes from './routes/admin.routes';
+import productRoutes from './routes/product.routes';
+import cartRoutes from './routes/cart.routes';
 
 const app = express();
 
@@ -48,6 +50,8 @@ app.use(passport.initialize());
 app.use('/api/auth', authRoutes);
 app.use('/api/seller', sellerRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/cart', cartRoutes);
 
 // Health check — useful for verifying the server is running
 app.get('/api/health', (_req, res) => {
