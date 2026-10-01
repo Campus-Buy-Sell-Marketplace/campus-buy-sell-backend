@@ -12,13 +12,25 @@ CREATE TABLE IF NOT EXISTS products (
   description   TEXT,
   price         NUMERIC(10,2) NOT NULL CHECK (price >= 0),
   category      VARCHAR(100),
-  condition     VARCHAR(50)   DEFAULT 'GOOD' CHECK (condition IN ('NEW', 'LIKE_NEW', 'GOOD', 'FAIR', 'POOR')),
+  condition     VARCHAR(50)   DEFAULT 'GOOD',
   image_url     VARCHAR(500),
   stock         INTEGER       NOT NULL DEFAULT 1 CHECK (stock >= 0),
   is_active     BOOLEAN       NOT NULL DEFAULT TRUE,
   created_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
+
+-- Ensure columns exist in case table was created with an earlier schema:
+ALTER TABLE products ADD COLUMN IF NOT EXISTS category VARCHAR(100);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS condition VARCHAR(50) DEFAULT 'GOOD';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS stock INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- Backfill default values for existing rows
+UPDATE products SET category = 'General' WHERE category IS NULL;
+UPDATE products SET condition = 'GOOD' WHERE condition IS NULL;
+UPDATE products SET stock = 1 WHERE stock IS NULL;
+UPDATE products SET is_active = TRUE WHERE is_active IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_products_seller_id  ON products (seller_id);
 CREATE INDEX IF NOT EXISTS idx_products_category   ON products (category);
