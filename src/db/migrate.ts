@@ -65,6 +65,21 @@ async function migrate(): Promise<void> {
     process.exit(1);
   }
 
+  // Apply V4 schema (user_preferences & wishlist_items)
+  const schema4Path = path.join(__dirname, 'schema_v4.sql');
+  try {
+    const sql4 = fs.readFileSync(schema4Path, 'utf8');
+    await pool.query(sql4);
+    console.log('✅ Schema V4 applied successfully!');
+    console.log('   - Table user_preferences created');
+    console.log('   - Table wishlist_items created\n');
+  } catch (err: any) {
+    console.error('❌ Failed to apply schema V4:');
+    console.error(err.message || err);
+    await pool.end();
+    process.exit(1);
+  }
+
   await pool.end();
 }
 
