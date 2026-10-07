@@ -178,24 +178,38 @@ export async function updateProduct(req: Request, res: Response): Promise<void> 
 
 // ── DELETE /api/products/:id  (seller only — own products) ──────────────────
 export async function deleteProduct(req: Request, res: Response): Promise<void> {
+  const client = await pool.connect();
   try {
     const sellerId = req.user!.id;
     const { id } = req.params;
 
-    const result = await pool.query(
-      'DELETE FROM products WHERE id = $1 AND seller_id = $2 RETURNING id',
+    await client.query('BEGIN');
+
+    // Verify ownership
+    const check = await client.query(
+      'SELECT id FROM products WHERE id = $1 AND seller_id = $2',
       [id, sellerId]
     );
 
-    if (result.rows.length === 0) {
+    if (check.rows.length === 0) {
+      await client.query('ROLLBACK');
       res.status(403).json({ message: 'Product not found or you do not own it.' });
       return;
     }
 
+    // Clean up dependent records so FK constraints do not block deletion
+    await client.query('DELETE FROM cart_items WHERE product_id = $1', [id]);
+    await client.query('DELETE FROM order_items WHERE product_id = $1', [id]);
+    await client.query('DELETE FROM products WHERE id = $1 AND seller_id = $2', [id, sellerId]);
+
+    await client.query('COMMIT');
     res.json({ message: 'Product deleted.' });
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('[products.deleteProduct] error:', err);
     res.status(500).json({ message: 'Failed to delete product.' });
+  } finally {
+    client.release();
   }
 }
 
