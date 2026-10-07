@@ -49,6 +49,22 @@ async function migrate(): Promise<void> {
     process.exit(1);
   }
 
+  // Apply V3 schema (orders & order_items)
+  const schema3Path = path.join(__dirname, 'schema_v3.sql');
+  console.log('\ud83d\udd04 Applying schema V3 (orders)...');
+  try {
+    const sql3 = fs.readFileSync(schema3Path, 'utf8');
+    await pool.query(sql3);
+    console.log('\u2705 Schema V3 applied successfully!');
+    console.log('   - Table orders created');
+    console.log('   - Table order_items created\n');
+  } catch (err: any) {
+    console.error('\u274c Failed to apply schema V3:');
+    console.error(err.message || err);
+    await pool.end();
+    process.exit(1);
+  }
+
   await pool.end();
 }
 

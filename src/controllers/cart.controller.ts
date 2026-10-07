@@ -37,7 +37,7 @@ export async function getCart(req: Request, res: Response): Promise<void> {
   }
 }
 
-// ── POST /api/cart  — add or increment item ──────────────────────────────────
+// ── POST /api/cart  — add or increment item (stock-capped) ───────────────────
 export async function addToCart(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
@@ -48,7 +48,9 @@ export async function addToCart(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    // Verify product exists and is active
+    const qty = Math.max(1, Number(quantity));
+
+    // Verify product exists and is active; get current stock
     const productCheck = await pool.query(
       'SELECT id, stock FROM products WHERE id = $1 AND is_active = TRUE',
       [productId]
@@ -58,13 +60,39 @@ export async function addToCart(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    const availableStock: number = productCheck.rows[0].stock;
+
+    if (availableStock === 0) {
+      res.status(409).json({ message: 'This product is out of stock.' });
+      return;
+    }
+
+    // Calculate what the new quantity would be (existing + requested)
+    const existing = await pool.query(
+      'SELECT quantity FROM cart_items WHERE user_id = $1 AND product_id = $2',
+      [userId, productId]
+    );
+    const existingQty: number = existing.rows[0]?.quantity ?? 0;
+    const desiredQty = existingQty + qty;
+
+    // Cap at available stock — never let cart quantity exceed stock
+    const finalQty = Math.min(desiredQty, availableStock);
+
+    if (finalQty <= existingQty) {
+      // Already at maximum stock, nothing to add
+      res.status(409).json({
+        message: `You already have the maximum available quantity (${availableStock}) in your cart.`,
+      });
+      return;
+    }
+
     const result = await pool.query(
       `INSERT INTO cart_items (user_id, product_id, quantity)
        VALUES ($1, $2, $3)
        ON CONFLICT (user_id, product_id)
-       DO UPDATE SET quantity = cart_items.quantity + $3
+       DO UPDATE SET quantity = $3
        RETURNING *`,
-      [userId, productId, Number(quantity)]
+      [userId, productId, finalQty]
     );
 
     res.json({ item: result.rows[0], message: 'Added to cart.' });
@@ -74,7 +102,8 @@ export async function addToCart(req: Request, res: Response): Promise<void> {
   }
 }
 
-// ── PATCH /api/cart/:itemId  — update quantity ───────────────────────────────
+
+// ── PATCH /api/cart/:itemId  — update quantity (stock-capped) ────────────────
 export async function updateCartItem(req: Request, res: Response): Promise<void> {
   try {
     const userId = req.user!.id;
@@ -86,11 +115,31 @@ export async function updateCartItem(req: Request, res: Response): Promise<void>
       return;
     }
 
+    // Fetch the cart item to find the product
+    const cartItemCheck = await pool.query(
+      `SELECT ci.product_id, p.stock
+       FROM cart_items ci
+       JOIN products p ON p.id = ci.product_id
+       WHERE ci.id = $1 AND ci.user_id = $2`,
+      [itemId, userId]
+    );
+    if (cartItemCheck.rows.length === 0) {
+      res.status(404).json({ message: 'Cart item not found.' });
+      return;
+    }
+
+    const availableStock: number = cartItemCheck.rows[0].stock;
+    const cappedQty = Math.min(Number(quantity), availableStock);
+
+    if (cappedQty < Number(quantity)) {
+      // Silently cap, but tell the client
+    }
+
     const result = await pool.query(
       `UPDATE cart_items SET quantity = $1
        WHERE id = $2 AND user_id = $3
        RETURNING *`,
-      [Number(quantity), itemId, userId]
+      [cappedQty, itemId, userId]
     );
 
     if (result.rows.length === 0) {
@@ -98,7 +147,13 @@ export async function updateCartItem(req: Request, res: Response): Promise<void>
       return;
     }
 
-    res.json({ item: result.rows[0] });
+    res.json({
+      item: result.rows[0],
+      ...(cappedQty < Number(quantity)
+        ? { warning: `Quantity capped at available stock (${availableStock}).` }
+        : {}),
+    });
+
   } catch (err) {
     console.error('[cart.updateCartItem] error:', err);
     res.status(500).json({ message: 'Failed to update cart item.' });
