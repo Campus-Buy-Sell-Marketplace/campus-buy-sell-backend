@@ -80,6 +80,21 @@ async function migrate(): Promise<void> {
     process.exit(1);
   }
 
+  // Apply V5 schema (OTP delivery verification + reserved_stock)
+  const schema5Path = path.join(__dirname, 'schema_v5.sql');
+  try {
+    const sql5 = fs.readFileSync(schema5Path, 'utf8');
+    await pool.query(sql5);
+    console.log('✅ Schema V5 applied successfully!');
+    console.log('   - delivery_otp, payment_method, otp_verified columns added to orders');
+    console.log('   - reserved_stock column added to products\n');
+  } catch (err: any) {
+    console.error('❌ Failed to apply schema V5:');
+    console.error(err.message || err);
+    await pool.end();
+    process.exit(1);
+  }
+
   await pool.end();
 }
 

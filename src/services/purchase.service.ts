@@ -1,9 +1,15 @@
 // ============================================================
-// Campus Marketplace — Purchase Service
-// Race-condition-safe inventory deduction using:
-//  • PostgreSQL transactions (BEGIN / COMMIT / ROLLBACK)
-//  • Row-level locking (SELECT … FOR UPDATE)
-//  • Post-lock stock check before decrementing
+// Campus Marketplace — Purchase Service (OTP Edition)
+//
+// Flow:
+//   1. Lock product rows (FOR UPDATE NOWAIT)
+//   2. Validate stock (available = stock - reserved_stock)
+//   3. Reserve stock (increment reserved_stock) — do NOT deduct yet
+//   4. Create order with status PENDING_MEETUP + generate OTP
+//   5. Clear cart
+//
+// Stock is permanently deducted only when the seller verifies
+// the delivery OTP (verifyDeliveryOtp in order.controller.ts).
 // ============================================================
 
 import pool from '../config/db';
@@ -16,6 +22,8 @@ export interface PurchaseLineItem {
 export interface OrderResult {
   orderId: string;
   totalAmount: number;
+  deliveryOtp: string;
+  paymentMethod: string;
   items: Array<{
     productId: string;
     title: string;
@@ -25,23 +33,23 @@ export interface OrderResult {
   }>;
 }
 
+/** Generate a 6-digit numeric OTP */
+function generateOtp(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
 /**
- * purchaseItems — Creates a single order for all items atomically.
+ * purchaseItems — Reserves stock and creates a PENDING_MEETUP order with OTP.
  *
- * For each product:
- *   1. Acquire an exclusive row lock (SELECT … FOR UPDATE NOWAIT).
- *   2. Re-read stock AFTER the lock is held.
- *   3. Reject immediately if stock < requested quantity.
- *   4. Deduct stock.
- * Then:
- *   5. Insert the order + all order_items in the same transaction.
- *   6. Clear the user's cart for the purchased items.
- *
- * If any step fails the entire transaction rolls back — inventory is safe.
+ * Stock reservation (not deduction):
+ *   • reserved_stock is incremented so other buyers see reduced availability.
+ *   • Actual stock column is NOT touched until OTP is verified.
+ *   • If order is cancelled, reserved_stock is decremented back.
  */
 export async function purchaseItems(
   buyerId: string,
-  lineItems: PurchaseLineItem[]
+  lineItems: PurchaseLineItem[],
+  paymentMethod: 'OFFLINE' | 'ONLINE' = 'OFFLINE'
 ): Promise<OrderResult> {
   if (!lineItems.length) {
     throw new Error('No items to purchase.');
@@ -55,15 +63,15 @@ export async function purchaseItems(
     let totalAmount = 0;
     const resolvedItems: OrderResult['items'] = [];
 
-    // ── 1. Lock rows and validate stock ─────────────────────────────────────
+    // ── 1. Lock rows, validate available stock, reserve ─────────────────────
     for (const { productId, quantity } of lineItems) {
       if (!Number.isInteger(quantity) || quantity < 1) {
         throw new Error(`Invalid quantity ${quantity} for product ${productId}.`);
       }
 
-      // Lock the product row so concurrent transactions must wait
+      // Lock the product row exclusively
       const lockResult = await client.query(
-        `SELECT id, title, price, stock, is_active, seller_id
+        `SELECT id, title, price, stock, reserved_stock, is_active, seller_id
          FROM products
          WHERE id = $1
          FOR UPDATE NOWAIT`,
@@ -80,11 +88,12 @@ export async function purchaseItems(
         throw new Error(`"${product.title}" is no longer available.`);
       }
 
-      // Check stock AFTER acquiring lock (prevents race conditions)
-      if (product.stock < quantity) {
+      // Available = total stock minus already reserved stock
+      const available = product.stock - product.reserved_stock;
+      if (available < quantity) {
         throw new Error(
           `Insufficient stock for "${product.title}". ` +
-          `Available: ${product.stock}, requested: ${quantity}.`
+          `Available: ${available}, requested: ${quantity}.`
         );
       }
 
@@ -100,26 +109,28 @@ export async function purchaseItems(
         subtotal,
       });
 
-      // ── 2. Deduct stock within the same transaction ──────────────────────
+      // ── 2. Reserve stock (increment reserved_stock, NOT deducting stock) ──
       await client.query(
         `UPDATE products
-         SET stock      = stock - $1,
-             is_active  = CASE WHEN stock - $1 = 0 THEN FALSE ELSE is_active END
+         SET reserved_stock = reserved_stock + $1
          WHERE id = $2`,
         [quantity, productId]
       );
     }
 
-    // ── 3. Create the order ──────────────────────────────────────────────────
+    // ── 3. Generate OTP ───────────────────────────────────────────────────────
+    const deliveryOtp = generateOtp();
+
+    // ── 4. Create the order ──────────────────────────────────────────────────
     const orderResult = await client.query(
-      `INSERT INTO orders (buyer_id, status, total_amount)
-       VALUES ($1, 'CONFIRMED', $2)
+      `INSERT INTO orders (buyer_id, status, total_amount, payment_method, delivery_otp)
+       VALUES ($1, 'PENDING_MEETUP', $2, $3, $4)
        RETURNING id`,
-      [buyerId, totalAmount]
+      [buyerId, totalAmount, paymentMethod, deliveryOtp]
     );
     const orderId: string = orderResult.rows[0].id;
 
-    // ── 4. Insert order items ────────────────────────────────────────────────
+    // ── 5. Insert order items ────────────────────────────────────────────────
     for (const item of resolvedItems) {
       await client.query(
         `INSERT INTO order_items (order_id, product_id, seller_id, quantity, unit_price)
@@ -129,7 +140,7 @@ export async function purchaseItems(
       );
     }
 
-    // ── 5. Remove purchased items from the buyer's cart ──────────────────────
+    // ── 6. Remove purchased items from the buyer's cart ──────────────────────
     const purchasedProductIds = lineItems.map((l) => l.productId);
     await client.query(
       `DELETE FROM cart_items
@@ -139,7 +150,7 @@ export async function purchaseItems(
 
     await client.query('COMMIT');
 
-    return { orderId, totalAmount, items: resolvedItems };
+    return { orderId, totalAmount, deliveryOtp, paymentMethod, items: resolvedItems };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
