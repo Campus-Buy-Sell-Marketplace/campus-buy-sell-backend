@@ -240,7 +240,7 @@ export async function getSellerOrders(req: Request, res: Response): Promise<void
     const sellerId = req.user!.id;
 
     const result = await pool.query(
-      `SELECT DISTINCT
+      `SELECT
          o.id, o.status, o.total_amount, o.created_at,
          o.payment_method, o.otp_verified,
          bu.name AS buyer_name, bu.email AS buyer_email,

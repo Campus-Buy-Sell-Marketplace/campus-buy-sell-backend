@@ -10,7 +10,7 @@ export async function getProducts(req: Request, res: Response): Promise<void> {
   try {
     const { category, q, limit = '50', offset = '0' } = req.query as Record<string, string>;
 
-    let whereClause = `WHERE p.is_active = TRUE AND p.stock > 0`;
+    let whereClause = `WHERE p.is_active = TRUE AND (p.stock - p.reserved_stock) > 0`;
     const params: (string | number)[] = [];
     let paramIndex = 1;
 
@@ -29,7 +29,9 @@ export async function getProducts(req: Request, res: Response): Promise<void> {
     const result = await pool.query(
       `SELECT
          p.id, p.title, p.description, p.price, p.category,
-         p.condition, p.image_url, p.stock, p.created_at,
+         p.condition, p.image_url, p.stock, p.reserved_stock,
+         (p.stock - p.reserved_stock) AS available_stock,
+         p.created_at,
          u.name AS seller_name, u.id AS seller_id
        FROM products p
        JOIN users u ON p.seller_id = u.id
@@ -61,7 +63,9 @@ export async function getProductById(req: Request, res: Response): Promise<void>
     const result = await pool.query(
       `SELECT
          p.id, p.title, p.description, p.price, p.category,
-         p.condition, p.image_url, p.stock, p.is_active, p.created_at, p.updated_at,
+         p.condition, p.image_url, p.stock, p.reserved_stock,
+         (p.stock - p.reserved_stock) AS available_stock,
+         p.is_active, p.created_at, p.updated_at,
          u.name AS seller_name, u.id AS seller_id
        FROM products p
        JOIN users u ON p.seller_id = u.id
