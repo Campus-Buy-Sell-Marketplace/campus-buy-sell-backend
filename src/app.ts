@@ -13,6 +13,7 @@ import productRoutes from './routes/product.routes';
 import cartRoutes from './routes/cart.routes';
 import orderRoutes from './routes/order.routes';
 import userRoutes from './routes/user.routes';
+import chatRoutes from './routes/chat.routes';
 
 const app = express();
 
@@ -56,6 +57,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/chat', chatRoutes);
 
 // Health check — useful for verifying the server is running
 app.get('/api/health', (_req, res) => {

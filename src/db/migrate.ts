@@ -109,6 +109,20 @@ async function migrate(): Promise<void> {
     process.exit(1);
   }
 
+  // Apply V7 schema (order_messages for buyer-seller chat)
+  const schema7Path = path.join(__dirname, 'schema_v7.sql');
+  try {
+    const sql7 = fs.readFileSync(schema7Path, 'utf8');
+    await pool.query(sql7);
+    console.log('✅ Schema V7 applied successfully!');
+    console.log('   - order_messages table created for buyer-seller chat\n');
+  } catch (err: any) {
+    console.error('❌ Failed to apply schema V7:');
+    console.error(err.message || err);
+    await pool.end();
+    process.exit(1);
+  }
+
   await pool.end();
 }
 
