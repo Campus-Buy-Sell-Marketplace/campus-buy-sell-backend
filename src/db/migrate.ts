@@ -95,6 +95,20 @@ async function migrate(): Promise<void> {
     process.exit(1);
   }
 
+  // Apply V6 schema (meetup_location, meetup_time, meetup_notes)
+  const schema6Path = path.join(__dirname, 'schema_v6.sql');
+  try {
+    const sql6 = fs.readFileSync(schema6Path, 'utf8');
+    await pool.query(sql6);
+    console.log('✅ Schema V6 applied successfully!');
+    console.log('   - meetup_location, meetup_time, meetup_notes columns added to orders\n');
+  } catch (err: any) {
+    console.error('❌ Failed to apply schema V6:');
+    console.error(err.message || err);
+    await pool.end();
+    process.exit(1);
+  }
+
   await pool.end();
 }
 

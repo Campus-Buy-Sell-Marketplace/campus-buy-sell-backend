@@ -32,7 +32,12 @@ export async function checkout(req: Request, res: Response): Promise<void> {
       return;
     }
 
-    const order = await purchaseItems(buyerId, lineItems, paymentMethod);
+    const { meetupLocation, meetupTime, meetupNotes } = req.body;
+    const order = await purchaseItems(buyerId, lineItems, paymentMethod, {
+      location: meetupLocation,
+      time: meetupTime,
+      notes: meetupNotes,
+    });
 
     res.status(201).json({
       message: 'Order placed successfully!',
@@ -164,6 +169,7 @@ export async function getMyOrders(req: Request, res: Response): Promise<void> {
       `SELECT
          o.id, o.status, o.total_amount, o.created_at,
          o.payment_method, o.delivery_otp, o.otp_verified,
+         o.meetup_location, o.meetup_time, o.meetup_notes,
          json_agg(
            json_build_object(
              'product_id', oi.product_id,
@@ -202,6 +208,7 @@ export async function getOrderById(req: Request, res: Response): Promise<void> {
       `SELECT
          o.id, o.status, o.total_amount, o.created_at,
          o.payment_method, o.delivery_otp, o.otp_verified,
+         o.meetup_location, o.meetup_time, o.meetup_notes,
          json_agg(
            json_build_object(
              'product_id', oi.product_id,
@@ -243,6 +250,7 @@ export async function getSellerOrders(req: Request, res: Response): Promise<void
       `SELECT
          o.id, o.status, o.total_amount, o.created_at,
          o.payment_method, o.otp_verified,
+         o.meetup_location, o.meetup_time, o.meetup_notes,
          bu.name AS buyer_name, bu.email AS buyer_email,
          json_agg(
            json_build_object(

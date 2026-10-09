@@ -24,6 +24,9 @@ export interface OrderResult {
   totalAmount: number;
   deliveryOtp: string;
   paymentMethod: string;
+  meetupLocation?: string;
+  meetupTime?: string;
+  meetupNotes?: string;
   items: Array<{
     productId: string;
     title: string;
@@ -39,17 +42,17 @@ function generateOtp(): string {
 }
 
 /**
- * purchaseItems — Reserves stock and creates a PENDING_MEETUP order with OTP.
- *
- * Stock reservation (not deduction):
- *   • reserved_stock is incremented so other buyers see reduced availability.
- *   • Actual stock column is NOT touched until OTP is verified.
- *   • If order is cancelled, reserved_stock is decremented back.
+ * purchaseItems — Reserves stock and creates a PENDING_MEETUP order with OTP and meetup details.
  */
 export async function purchaseItems(
   buyerId: string,
   lineItems: PurchaseLineItem[],
-  paymentMethod: 'OFFLINE' | 'ONLINE' = 'OFFLINE'
+  paymentMethod: 'OFFLINE' | 'ONLINE' = 'OFFLINE',
+  meetupDetails?: {
+    location?: string;
+    time?: string;
+    notes?: string;
+  }
 ): Promise<OrderResult> {
   if (!lineItems.length) {
     throw new Error('No items to purchase.');
@@ -122,11 +125,15 @@ export async function purchaseItems(
     const deliveryOtp = generateOtp();
 
     // ── 4. Create the order ──────────────────────────────────────────────────
+    const meetupLocation = meetupDetails?.location || 'Campus Central Library Gate';
+    const meetupTime = meetupDetails?.time || 'Tomorrow (4:00 PM - 5:30 PM)';
+    const meetupNotes = meetupDetails?.notes || null;
+
     const orderResult = await client.query(
-      `INSERT INTO orders (buyer_id, status, total_amount, payment_method, delivery_otp)
-       VALUES ($1, 'PENDING_MEETUP', $2, $3, $4)
+      `INSERT INTO orders (buyer_id, status, total_amount, payment_method, delivery_otp, meetup_location, meetup_time, meetup_notes)
+       VALUES ($1, 'PENDING_MEETUP', $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [buyerId, totalAmount, paymentMethod, deliveryOtp]
+      [buyerId, totalAmount, paymentMethod, deliveryOtp, meetupLocation, meetupTime, meetupNotes]
     );
     const orderId: string = orderResult.rows[0].id;
 
@@ -150,7 +157,16 @@ export async function purchaseItems(
 
     await client.query('COMMIT');
 
-    return { orderId, totalAmount, deliveryOtp, paymentMethod, items: resolvedItems };
+    return {
+      orderId,
+      totalAmount,
+      deliveryOtp,
+      paymentMethod,
+      meetupLocation,
+      meetupTime,
+      meetupNotes: meetupNotes || undefined,
+      items: resolvedItems,
+    };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
