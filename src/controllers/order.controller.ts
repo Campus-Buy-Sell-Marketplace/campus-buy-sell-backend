@@ -109,7 +109,7 @@ export async function verifyDeliveryOtp(req: Request, res: Response): Promise<vo
       return;
     }
 
-    if (order.status !== 'PENDING_MEETUP') {
+    if (order.status !== 'PENDING_MEETUP' && order.status !== 'PAID_PENDING_MEETUP') {
       res.status(400).json({ message: 'This order is not awaiting delivery.' });
       return;
     }
@@ -168,8 +168,12 @@ export async function getMyOrders(req: Request, res: Response): Promise<void> {
     const result = await pool.query(
       `SELECT
          o.id, o.status, o.total_amount, o.created_at,
-         o.payment_method, o.delivery_otp, o.otp_verified,
-         o.meetup_location, o.meetup_time, o.meetup_notes,
+         o.payment_method, o.otp_verified,
+         o.meetup_location, o.meetup_time, o.meetup_notes, o.payment_expires_at,
+         CASE
+           WHEN o.payment_method = 'ONLINE' AND o.status = 'PENDING_PAYMENT' THEN NULL
+           ELSE o.delivery_otp
+         END AS delivery_otp,
          json_agg(
            json_build_object(
              'product_id', oi.product_id,
@@ -207,8 +211,12 @@ export async function getOrderById(req: Request, res: Response): Promise<void> {
     const result = await pool.query(
       `SELECT
          o.id, o.status, o.total_amount, o.created_at,
-         o.payment_method, o.delivery_otp, o.otp_verified,
-         o.meetup_location, o.meetup_time, o.meetup_notes,
+         o.payment_method, o.otp_verified,
+         o.meetup_location, o.meetup_time, o.meetup_notes, o.payment_expires_at,
+         CASE
+           WHEN o.payment_method = 'ONLINE' AND o.status = 'PENDING_PAYMENT' THEN NULL
+           ELSE o.delivery_otp
+         END AS delivery_otp,
          json_agg(
            json_build_object(
              'product_id', oi.product_id,

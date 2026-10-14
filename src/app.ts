@@ -14,6 +14,7 @@ import cartRoutes from './routes/cart.routes';
 import orderRoutes from './routes/order.routes';
 import userRoutes from './routes/user.routes';
 import chatRoutes from './routes/chat.routes';
+import paymentRoutes from './routes/payment.routes';
 
 const app = express();
 
@@ -39,7 +40,11 @@ app.use(
   })
 );
 
-// Parse JSON request bodies
+// Capture raw body Buffer specifically on the Razorpay webhook endpoint
+// MUST be mounted BEFORE express.json() to prevent JSON serialization altering the HMAC signature!
+app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
+
+// Parse JSON request bodies for all other routes
 app.use(express.json());
 
 // Parse cookies (needed to read the JWT auth cookie)
@@ -58,6 +63,7 @@ app.use('/api/cart', cartRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/payments', paymentRoutes);
 
 // Health check — useful for verifying the server is running
 app.get('/api/health', (_req, res) => {

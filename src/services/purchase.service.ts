@@ -13,6 +13,7 @@
 // ============================================================
 
 import pool from '../config/db';
+import { expireStaleOrdersForProducts } from './cleanup.service';
 
 export interface PurchaseLineItem {
   productId: string;
@@ -57,6 +58,10 @@ export async function purchaseItems(
   if (!lineItems.length) {
     throw new Error('No items to purchase.');
   }
+
+  // ── Just-in-Time (Lazy) Expiry: Release expired stock on the requested products ──
+  const productIds = lineItems.map((l) => l.productId);
+  await expireStaleOrdersForProducts(productIds);
 
   const client = await pool.connect();
 
@@ -129,11 +134,19 @@ export async function purchaseItems(
     const meetupTime = meetupDetails?.time || 'Tomorrow (4:00 PM - 5:30 PM)';
     const meetupNotes = meetupDetails?.notes || null;
 
+    const initialStatus = paymentMethod === 'ONLINE' ? 'PENDING_PAYMENT' : 'PENDING_MEETUP';
+
     const orderResult = await client.query(
-      `INSERT INTO orders (buyer_id, status, total_amount, payment_method, delivery_otp, meetup_location, meetup_time, meetup_notes)
-       VALUES ($1, 'PENDING_MEETUP', $2, $3, $4, $5, $6, $7)
+      `INSERT INTO orders (
+         buyer_id, status, total_amount, payment_method, delivery_otp,
+         meetup_location, meetup_time, meetup_notes, payment_expires_at
+       )
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8,
+         CASE WHEN $9 = 'ONLINE' THEN NOW() + INTERVAL '15 minutes' ELSE NULL END
+       )
        RETURNING id`,
-      [buyerId, totalAmount, paymentMethod, deliveryOtp, meetupLocation, meetupTime, meetupNotes]
+      [buyerId, initialStatus, totalAmount, paymentMethod, deliveryOtp, meetupLocation, meetupTime, meetupNotes, paymentMethod]
     );
     const orderId: string = orderResult.rows[0].id;
 
@@ -160,7 +173,7 @@ export async function purchaseItems(
     return {
       orderId,
       totalAmount,
-      deliveryOtp,
+      deliveryOtp: paymentMethod === 'ONLINE' ? 'LOCKED_UNTIL_PAID' : deliveryOtp,
       paymentMethod,
       meetupLocation,
       meetupTime,

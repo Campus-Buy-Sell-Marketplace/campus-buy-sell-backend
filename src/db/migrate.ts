@@ -123,6 +123,26 @@ async function migrate(): Promise<void> {
     process.exit(1);
   }
 
+  // Apply V8 schema (online payment & Razorpay integration)
+  const schema8Path = path.join(__dirname, 'schema_v8.sql');
+  console.log('🔄 Applying schema V8 (online payments & Razorpay integration)...');
+  try {
+    const sql8 = fs.readFileSync(schema8Path, 'utf8');
+    await pool.query(sql8);
+    console.log('✅ Schema V8 applied successfully!');
+    console.log('   - orders status check updated (PENDING_PAYMENT, PAID_PENDING_MEETUP)');
+    console.log('   - orders payment_expires_at column added');
+    console.log('   - payment_attempts table created');
+    console.log('   - payment_events table created');
+    console.log('   - refunds table created');
+    console.log('   - seller_transfers table created\n');
+  } catch (err: any) {
+    console.error('❌ Failed to apply schema V8:');
+    console.error(err.message || err);
+    await pool.end();
+    process.exit(1);
+  }
+
   await pool.end();
 }
 
