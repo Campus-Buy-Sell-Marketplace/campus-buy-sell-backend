@@ -23,7 +23,7 @@ ALTER TABLE orders
 ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_status_check;
 ALTER TABLE orders
   ADD CONSTRAINT orders_status_check
-    CHECK (status IN ('PENDING_MEETUP', 'COMPLETED', 'CANCELLED', 'PENDING', 'CONFIRMED'));
+    CHECK (status IN ('PENDING_MEETUP', 'PENDING_PAYMENT', 'PAID_PENDING_MEETUP', 'COMPLETED', 'CANCELLED', 'PENDING', 'CONFIRMED'));
 
 -- 5. Track reserved stock on products so we know how much is actually available
 ALTER TABLE products
