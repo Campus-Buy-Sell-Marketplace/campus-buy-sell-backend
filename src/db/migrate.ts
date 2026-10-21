@@ -143,6 +143,22 @@ async function migrate(): Promise<void> {
     process.exit(1);
   }
 
+  // Apply V9 schema (seller payout profiles & seller payouts)
+  const schema9Path = path.join(__dirname, 'schema_v9.sql');
+  console.log('🔄 Applying schema V9 (seller payouts & UPI profiles)...');
+  try {
+    const sql9 = fs.readFileSync(schema9Path, 'utf8');
+    await pool.query(sql9);
+    console.log('✅ Schema V9 applied successfully!');
+    console.log('   - seller_payout_profiles table created');
+    console.log('   - seller_payouts table created\n');
+  } catch (err: any) {
+    console.error('❌ Failed to apply schema V9:');
+    console.error(err.message || err);
+    await pool.end();
+    process.exit(1);
+  }
+
   await pool.end();
 }
 

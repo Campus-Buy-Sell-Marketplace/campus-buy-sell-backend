@@ -28,6 +28,10 @@ export interface VerifyPaymentResult {
  * Follows strict isolation: external provider call happens OUTSIDE database transactions.
  */
 export async function initiatePayment(orderId: string, buyerId: string): Promise<InitiatePaymentResult> {
+  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+    throw new Error('Razorpay API keys are not configured. Please add your Live Key ID and Secret to .env');
+  }
+
   // A. Fetch and validate order
   const orderResult = await pool.query(
     `SELECT id, buyer_id, status, payment_method, payment_expires_at
@@ -181,6 +185,32 @@ export async function verifyPayment(
     };
   }
 
+  // Late payment protocol: Order was cancelled (e.g. 15-minute window expired while paying)
+  if (order.status === 'CANCELLED') {
+    const rzpPayment = await razorpayClient.payments.fetch(razorpayPaymentId);
+    if (rzpPayment.status === 'captured') {
+      const refundReceipt = `ref_late_${order.id.replace(/-/g, '').slice(0, 20)}`;
+      await razorpayClient.payments.refund(razorpayPaymentId, {
+        amount: Number(rzpPayment.amount),
+        speed: 'normal',
+        receipt: refundReceipt,
+        notes: {
+          orderId,
+          reason: 'Order expired prior to payment confirmation',
+        },
+      });
+
+      await pool.query(
+        `INSERT INTO refunds (payment_attempt_id, order_id, amount_paise, provider_refund_id, receipt, reason, status)
+         SELECT id, order_id, amount_paise, $1, $2, 'Order expired prior to payment confirmation', 'PROCESSED'
+         FROM payment_attempts WHERE order_id = $3 AND provider_order_id = $4
+         ON CONFLICT (provider_refund_id) DO NOTHING`,
+        [`rfnd_late_${Date.now()}`, refundReceipt, orderId, razorpayOrderId]
+      );
+    }
+    throw new Error('This order expired before payment was confirmed. A full refund has been automatically initiated to your bank account.');
+  }
+
   // C. Find payment attempt
   const attemptResult = await pool.query(
     `SELECT id, amount_paise, status FROM payment_attempts
@@ -213,6 +243,22 @@ export async function verifyPayment(
   try {
     await client.query('BEGIN');
 
+    // Lock order row to synchronize with any concurrent webhook or refund
+    const lockedOrderResult = await client.query(
+      `SELECT status, delivery_otp FROM orders WHERE id = $1 FOR UPDATE`,
+      [orderId]
+    );
+
+    if (lockedOrderResult.rows.length === 0) {
+      throw new Error('Order not found during verification.');
+    }
+
+    const currentStatus = lockedOrderResult.rows[0].status;
+    if (currentStatus === 'CANCELLED') {
+      await client.query('ROLLBACK');
+      throw new Error('Order expired before payment was confirmed. Please refresh your orders page.');
+    }
+
     // Update payment attempt to CAPTURED
     await client.query(
       `UPDATE payment_attempts
@@ -224,14 +270,16 @@ export async function verifyPayment(
       [razorpayPaymentId, attempt.id]
     );
 
-    // Update order status to PAID_PENDING_MEETUP
-    await client.query(
-      `UPDATE orders
-       SET status = 'PAID_PENDING_MEETUP',
-           updated_at = NOW()
-       WHERE id = $1 AND status = 'PENDING_PAYMENT'`,
-      [orderId]
-    );
+    // Update order status to PAID_PENDING_MEETUP if still PENDING_PAYMENT
+    if (currentStatus === 'PENDING_PAYMENT') {
+      await client.query(
+        `UPDATE orders
+         SET status = 'PAID_PENDING_MEETUP',
+             updated_at = NOW()
+         WHERE id = $1`,
+        [orderId]
+      );
+    }
 
     await client.query('COMMIT');
   } catch (err) {

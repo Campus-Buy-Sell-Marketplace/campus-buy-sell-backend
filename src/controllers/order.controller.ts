@@ -82,17 +82,21 @@ export async function verifyDeliveryOtp(req: Request, res: Response): Promise<vo
       return;
     }
 
-    // Fetch the order — must have at least one item from this seller
-    const orderResult = await pool.query(
-      `SELECT o.id, o.status, o.delivery_otp, o.otp_verified, o.buyer_id
+    await client.query('BEGIN');
+
+    // Fetch the order with exclusive row lock — prevents concurrent delivery verification or race with refund
+    const orderResult = await client.query(
+      `SELECT o.id, o.status, o.delivery_otp, o.otp_verified, o.buyer_id, o.payment_method
        FROM orders o
        JOIN order_items oi ON oi.order_id = o.id
        WHERE o.id = $1 AND oi.seller_id = $2
+       FOR UPDATE OF o
        LIMIT 1`,
       [orderId, sellerId]
     );
 
     if (orderResult.rows.length === 0) {
+      await client.query('ROLLBACK');
       res.status(404).json({ message: 'Order not found or you are not the seller.' });
       return;
     }
@@ -100,27 +104,29 @@ export async function verifyDeliveryOtp(req: Request, res: Response): Promise<vo
     const order = orderResult.rows[0];
 
     if (order.status === 'COMPLETED') {
+      await client.query('ROLLBACK');
       res.status(400).json({ message: 'This order is already completed.' });
       return;
     }
 
     if (order.status === 'CANCELLED') {
+      await client.query('ROLLBACK');
       res.status(400).json({ message: 'This order has been cancelled.' });
       return;
     }
 
     if (order.status !== 'PENDING_MEETUP' && order.status !== 'PAID_PENDING_MEETUP') {
+      await client.query('ROLLBACK');
       res.status(400).json({ message: 'This order is not awaiting delivery.' });
       return;
     }
 
     // Verify OTP
     if (order.delivery_otp !== otp.trim()) {
+      await client.query('ROLLBACK');
       res.status(400).json({ message: 'Incorrect OTP. Please ask the buyer to share the correct code.' });
       return;
     }
-
-    await client.query('BEGIN');
 
     // Fetch all items in this order
     const itemsResult = await client.query(
@@ -147,6 +153,51 @@ export async function verifyDeliveryOtp(req: Request, res: Response): Promise<vo
        WHERE id = $1`,
       [orderId]
     );
+
+    // If order was paid ONLINE, automatically generate a PENDING seller payout record
+    if (order.payment_method === 'ONLINE') {
+      const sellerItemsRes = await client.query(
+        `SELECT SUM(unit_price * quantity) as gross_amount
+         FROM order_items
+         WHERE order_id = $1 AND seller_id = $2`,
+        [orderId, sellerId]
+      );
+
+      const grossAmount = Number(sellerItemsRes.rows[0]?.gross_amount || 0);
+      if (grossAmount > 0) {
+        const commissionPercent = 2.0; // 2% platform fee
+        const commissionAmount = Math.round(grossAmount * (commissionPercent / 100) * 100) / 100;
+        const netPayoutAmount = Math.max(0, grossAmount - commissionAmount);
+
+        // Fetch seller payout profile if configured
+        const profileRes = await client.query(
+          `SELECT upi_id, account_holder_name FROM seller_payout_profiles WHERE user_id = $1`,
+          [sellerId]
+        );
+
+        const upiId = profileRes.rows[0]?.upi_id || 'NOT_SET';
+        const accountHolderName = profileRes.rows[0]?.account_holder_name || null;
+
+        await client.query(
+          `INSERT INTO seller_payouts (
+             order_id, seller_id, order_amount, commission_percent,
+             commission_amount, net_payout_amount, seller_upi_id,
+             account_holder_name, status
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING')
+           ON CONFLICT (order_id, seller_id) DO NOTHING`,
+          [
+            orderId,
+            sellerId,
+            grossAmount,
+            commissionPercent,
+            commissionAmount,
+            netPayoutAmount,
+            upiId,
+            accountHolderName,
+          ]
+        );
+      }
+    }
 
     await client.query('COMMIT');
 

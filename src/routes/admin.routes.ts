@@ -7,6 +7,8 @@ import {
   updateUserRole,
   getSellerApplications,
   updateSellerApplicationStatus,
+  getPayouts,
+  markPayoutAsPaid,
 } from '../controllers/admin.controller';
 
 const router = Router();
@@ -14,7 +16,7 @@ const router = Router();
 // All admin routes require a valid JWT + ADMIN or SUPER_ADMIN role
 router.use(authenticate, requireRole('ADMIN', 'SUPER_ADMIN'));
 
-// GET  /api/admin/stats         — dashboard stat cards (including pending seller apps)
+// GET  /api/admin/stats         — dashboard stat cards (including pending seller apps & payouts)
 router.get('/stats', getStats);
 
 // GET  /api/admin/users         — full user list
@@ -28,5 +30,11 @@ router.get('/seller-applications', getSellerApplications);
 
 // PATCH /api/admin/seller-applications/:id/status — approve or reject application
 router.patch('/seller-applications/:id/status', updateSellerApplicationStatus);
+
+// GET   /api/admin/payouts — list all seller payouts (supports ?status=PENDING)
+router.get('/payouts', getPayouts);
+
+// PATCH /api/admin/payouts/:id/mark-paid — record manual transfer reference & mark as PAID
+router.patch('/payouts/:id/mark-paid', markPayoutAsPaid);
 
 export default router;

@@ -20,15 +20,27 @@ export async function getStats(req: Request, res: Response): Promise<void> {
       FROM seller_applications
     `);
 
+    const payoutResult = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'PENDING')                                     AS pending_payouts_count,
+        COALESCE(SUM(net_payout_amount) FILTER (WHERE status = 'PENDING'), 0)          AS pending_payouts_amount,
+        COALESCE(SUM(commission_amount) FILTER (WHERE status = 'PAID'), 0)             AS platform_commission_earned
+      FROM seller_payouts
+    `);
+
     const userRow = userResult.rows[0];
     const appRow = appResult.rows[0];
+    const payoutRow = payoutResult.rows[0];
 
     res.json({
-      totalUsers:          Number(userRow.total_users),
-      totalSellers:        Number(userRow.total_sellers),
-      totalStudents:       Number(userRow.total_students),
-      totalAdmins:         Number(userRow.total_admins),
-      pendingApplications: Number(appRow?.pending_applications || 0),
+      totalUsers:               Number(userRow.total_users),
+      totalSellers:             Number(userRow.total_sellers),
+      totalStudents:            Number(userRow.total_students),
+      totalAdmins:              Number(userRow.total_admins),
+      pendingApplications:      Number(appRow?.pending_applications || 0),
+      pendingPayoutsCount:      Number(payoutRow?.pending_payouts_count || 0),
+      pendingPayoutsAmount:     Number(payoutRow?.pending_payouts_amount || 0),
+      platformCommissionEarned: Number(payoutRow?.platform_commission_earned || 0),
     });
   } catch (err) {
     console.error('[admin.getStats] error:', err);
@@ -185,5 +197,98 @@ export async function updateSellerApplicationStatus(req: Request, res: Response)
     res.status(500).json({ message: 'Failed to update application status.' });
   } finally {
     client.release();
+  }
+}
+
+// ── GET /api/admin/payouts ───────────────────────────────────────────────────
+// Returns all seller payouts, optionally filtered by status (?status=PENDING)
+export async function getPayouts(req: Request, res: Response): Promise<void> {
+  try {
+    const { status } = req.query;
+
+    let query = `
+      SELECT
+        sp.id,
+        sp.order_id,
+        sp.seller_id,
+        sp.order_amount,
+        sp.commission_percent,
+        sp.commission_amount,
+        sp.net_payout_amount,
+        sp.seller_upi_id,
+        sp.account_holder_name,
+        sp.status,
+        sp.transaction_reference,
+        sp.admin_notes,
+        sp.paid_at,
+        sp.created_at,
+        u.name AS seller_name,
+        u.email AS seller_email,
+        spp.phone_number AS seller_phone,
+        o.payment_method,
+        o.created_at AS order_created_at
+      FROM seller_payouts sp
+      JOIN users u ON sp.seller_id = u.id
+      JOIN orders o ON sp.order_id = o.id
+      LEFT JOIN seller_payout_profiles spp ON spp.user_id = sp.seller_id
+    `;
+
+    const values: any[] = [];
+    if (status && typeof status === 'string' && status !== 'ALL') {
+      query += ` WHERE sp.status = $1`;
+      values.push(status.toUpperCase());
+    }
+
+    query += ` ORDER BY sp.created_at DESC`;
+
+    const result = await pool.query(query, values);
+    res.json({ payouts: result.rows });
+  } catch (err) {
+    console.error('[admin.getPayouts] error:', err);
+    res.status(500).json({ message: 'Failed to fetch payouts.' });
+  }
+}
+
+// ── PATCH /api/admin/payouts/:id/mark-paid ──────────────────────────────────
+// Allows admin to record that manual UPI / bank transfer was completed.
+export async function markPayoutAsPaid(req: Request, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+    const { transactionReference, adminNotes } = req.body;
+
+    if (!transactionReference?.trim()) {
+      res.status(400).json({ message: 'Transaction reference / UTR is required.' });
+      return;
+    }
+
+    const checkResult = await pool.query(
+      `SELECT id, status FROM seller_payouts WHERE id = $1`,
+      [id]
+    );
+
+    if (checkResult.rows.length === 0) {
+      res.status(404).json({ message: 'Payout record not found.' });
+      return;
+    }
+
+    const updateResult = await pool.query(
+      `UPDATE seller_payouts
+       SET status = 'PAID',
+           transaction_reference = $1,
+           admin_notes = $2,
+           paid_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $3
+       RETURNING *`,
+      [transactionReference.trim(), adminNotes?.trim() || null, id]
+    );
+
+    res.json({
+      message: 'Payout marked as PAID successfully!',
+      payout: updateResult.rows[0],
+    });
+  } catch (err) {
+    console.error('[admin.markPayoutAsPaid] error:', err);
+    res.status(500).json({ message: 'Failed to mark payout as paid.' });
   }
 }
