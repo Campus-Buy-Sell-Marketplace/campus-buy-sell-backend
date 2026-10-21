@@ -28,9 +28,17 @@ export async function getStats(req: Request, res: Response): Promise<void> {
       FROM seller_payouts
     `);
 
+    const escrowResult = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'PAID_PENDING_MEETUP')                        AS escrow_orders_count,
+        COALESCE(SUM(total_amount) FILTER (WHERE status = 'PAID_PENDING_MEETUP'), 0)  AS escrow_orders_amount
+      FROM orders
+    `);
+
     const userRow = userResult.rows[0];
     const appRow = appResult.rows[0];
     const payoutRow = payoutResult.rows[0];
+    const escrowRow = escrowResult.rows[0];
 
     res.json({
       totalUsers:               Number(userRow.total_users),
@@ -41,6 +49,8 @@ export async function getStats(req: Request, res: Response): Promise<void> {
       pendingPayoutsCount:      Number(payoutRow?.pending_payouts_count || 0),
       pendingPayoutsAmount:     Number(payoutRow?.pending_payouts_amount || 0),
       platformCommissionEarned: Number(payoutRow?.platform_commission_earned || 0),
+      escrowOrdersCount:        Number(escrowRow?.escrow_orders_count || 0),
+      escrowOrdersAmount:       Number(escrowRow?.escrow_orders_amount || 0),
     });
   } catch (err) {
     console.error('[admin.getStats] error:', err);
@@ -290,5 +300,141 @@ export async function markPayoutAsPaid(req: Request, res: Response): Promise<voi
   } catch (err) {
     console.error('[admin.markPayoutAsPaid] error:', err);
     res.status(500).json({ message: 'Failed to mark payout as paid.' });
+  }
+}
+
+// ── GET /api/admin/escrow-orders ─────────────────────────────────────────────
+// Returns orders where buyer paid online, currently held in escrow awaiting delivery
+export async function getEscrowOrders(req: Request, res: Response): Promise<void> {
+  try {
+    const result = await pool.query(`
+      SELECT
+        o.id,
+        o.buyer_id,
+        o.total_amount,
+        o.payment_method,
+        o.status,
+        o.delivery_otp,
+        o.meetup_location,
+        o.meetup_time,
+        o.created_at,
+        b.name AS buyer_name,
+        b.email AS buyer_email,
+        s.name AS seller_name,
+        s.email AS seller_email,
+        s.id AS seller_id,
+        p.title AS product_title,
+        oi.quantity,
+        oi.unit_price
+      FROM orders o
+      JOIN users b ON b.id = o.buyer_id
+      JOIN order_items oi ON oi.order_id = o.id
+      JOIN users s ON s.id = oi.seller_id
+      JOIN products p ON p.id = oi.product_id
+      WHERE o.status = 'PAID_PENDING_MEETUP'
+      ORDER BY o.created_at DESC
+    `);
+
+    res.json({ orders: result.rows });
+  } catch (err) {
+    console.error('[admin.getEscrowOrders] error:', err);
+    res.status(500).json({ message: 'Failed to fetch escrow orders.' });
+  }
+}
+
+// ── POST /api/admin/orders/:orderId/confirm-delivery ─────────────────────────
+// Admin override to verify delivery & move order from ESCROW -> COMPLETED -> PENDING PAYOUT
+export async function confirmDeliveryAsAdmin(req: Request, res: Response): Promise<void> {
+  const client = await pool.connect();
+  try {
+    const { orderId } = req.params;
+
+    await client.query('BEGIN');
+
+    const orderRes = await client.query(
+      `SELECT id, status, payment_method FROM orders WHERE id = $1 FOR UPDATE`,
+      [orderId]
+    );
+
+    if (orderRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      res.status(404).json({ message: 'Order not found.' });
+      return;
+    }
+
+    const order = orderRes.rows[0];
+    if (order.status === 'COMPLETED') {
+      await client.query('ROLLBACK');
+      res.status(400).json({ message: 'Order is already completed.' });
+      return;
+    }
+
+    // Permanently deduct stock
+    const itemsRes = await client.query(
+      `SELECT product_id, quantity, seller_id, unit_price FROM order_items WHERE order_id = $1`,
+      [orderId]
+    );
+
+    for (const item of itemsRes.rows) {
+      await client.query(
+        `UPDATE products
+         SET stock          = stock - $1,
+             reserved_stock = GREATEST(reserved_stock - $1, 0),
+             is_active      = CASE WHEN (stock - $1) <= 0 THEN FALSE ELSE is_active END
+         WHERE id = $2`,
+        [item.quantity, item.product_id]
+      );
+    }
+
+    // Update order status to COMPLETED
+    await client.query(
+      `UPDATE orders SET status = 'COMPLETED', otp_verified = TRUE, updated_at = NOW() WHERE id = $1`,
+      [orderId]
+    );
+
+    // If order was paid ONLINE, generate PENDING seller payout
+    if (order.payment_method === 'ONLINE') {
+      const sellerTotalsRes = await client.query(
+        `SELECT seller_id, SUM(unit_price * quantity) as gross_amount
+         FROM order_items
+         WHERE order_id = $1
+         GROUP BY seller_id`,
+        [orderId]
+      );
+
+      for (const row of sellerTotalsRes.rows) {
+        const gross = Number(row.gross_amount);
+        const feeRate = 2.0;
+        const feeAmount = Math.round(gross * (feeRate / 100) * 100) / 100;
+        const netPayout = Math.max(0, gross - feeAmount);
+
+        const profRes = await client.query(
+          `SELECT upi_id, account_holder_name FROM seller_payout_profiles WHERE user_id = $1`,
+          [row.seller_id]
+        );
+
+        const upiId = profRes.rows[0]?.upi_id || 'NOT_SET';
+        const holderName = profRes.rows[0]?.account_holder_name || null;
+
+        await client.query(
+          `INSERT INTO seller_payouts (
+             order_id, seller_id, order_amount, commission_percent,
+             commission_amount, net_payout_amount, seller_upi_id,
+             account_holder_name, status
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING')
+           ON CONFLICT (order_id, seller_id) DO NOTHING`,
+          [orderId, row.seller_id, gross, feeRate, feeAmount, netPayout, upiId, holderName]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    res.json({ message: 'Delivery confirmed successfully! Order marked as completed and queued for payout.' });
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    console.error('[admin.confirmDeliveryAsAdmin] error:', err);
+    res.status(500).json({ message: 'Failed to confirm delivery.' });
+  } finally {
+    client.release();
   }
 }

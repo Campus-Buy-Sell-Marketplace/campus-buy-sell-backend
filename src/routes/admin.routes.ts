@@ -9,6 +9,8 @@ import {
   updateSellerApplicationStatus,
   getPayouts,
   markPayoutAsPaid,
+  getEscrowOrders,
+  confirmDeliveryAsAdmin,
 } from '../controllers/admin.controller';
 
 const router = Router();
@@ -36,5 +38,11 @@ router.get('/payouts', getPayouts);
 
 // PATCH /api/admin/payouts/:id/mark-paid — record manual transfer reference & mark as PAID
 router.patch('/payouts/:id/mark-paid', markPayoutAsPaid);
+
+// GET   /api/admin/escrow-orders — orders currently held in escrow awaiting delivery
+router.get('/escrow-orders', getEscrowOrders);
+
+// POST  /api/admin/orders/:orderId/confirm-delivery — admin marks order delivered to release to payouts
+router.post('/orders/:orderId/confirm-delivery', confirmDeliveryAsAdmin);
 
 export default router;
