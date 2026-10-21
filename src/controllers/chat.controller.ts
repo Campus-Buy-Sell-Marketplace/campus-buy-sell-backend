@@ -9,6 +9,7 @@
 
 import { Request, Response } from 'express';
 import pool from '../config/db';
+import { broadcastMessage } from '../socket';
 
 // ── GET /api/chat/:orderId ─────────────────────────────────────────────────────
 // Fetches all messages for an order.
@@ -109,6 +110,9 @@ export async function sendMessage(req: Request, res: Response): Promise<void> {
       sender_name: userInfo.rows[0]?.name,
       sender_role: userInfo.rows[0]?.role,
     };
+
+    // Broadcast in real-time to everyone in the order chat room
+    broadcastMessage(orderId, msg);
 
     res.status(201).json({ message: msg });
   } catch (err) {
